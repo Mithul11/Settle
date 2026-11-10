@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Deal {
+  id             String      @id @default(cuid())
+  title          String
+  brief          String
+  clientName     String
+  freelancerName String
+  repoUrl        String?
+  milestones     Milestone[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+// status: PENDING | FUNDED | SUBMITTED | DISPUTED | RELEASE_PENDING |
+//         RELEASED | PARTIALLY_RELEASED | VOIDED   (see lib/status.ts)
+model Milestone {
+  id              String   @id @default(cuid())
+  dealId          String
+  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  position        Int      @default(0)
+  title           String
+  criteria        Json
+  amount          Decimal  @db.Decimal(10, 2)
+  status          String   @default("PENDING")
+  deliverableUrl  String?
+  orderId         String?  @unique
+  authorizationId String?  @unique
+  captureId       String?
+  capturedAmount  Decimal? @db.Decimal(10, 2)
+  reviews         Review[]
+  events          Event[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([dealId])
+}
+
+model Review {
+  id          String    @id @default(cuid())
+  milestoneId String
+  milestone   Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  verdict     String
+  score       Int
+  result      Json
+  createdAt   DateTime  @default(now())
+
+  @@index([milestoneId])
+}
+
+// milestoneId is optional so webhook events we cannot match are still logged.
+model Event {
+  id          String     @id @default(cuid())
+  milestoneId String?
+  milestone   Milestone? @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  type        String
+  payload     Json
+  createdAt   DateTime   @default(now())
+
+  @@index([milestoneId])
+}

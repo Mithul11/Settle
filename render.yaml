@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: settle
+    runtime: node
+    plan: free
+    # --include=dev: the build needs devDependencies (prisma CLI, TypeScript,
+    # Tailwind) even when NODE_ENV=production.
+    buildCommand: npm ci --include=dev && npx prisma generate && npx prisma migrate deploy && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Secrets: set these in the Render dashboard. They are never committed.
+      - key: DATABASE_URL
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: GOOGLE_GENERATIVE_AI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GITHUB_TOKEN
+        sync: false
