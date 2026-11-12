@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { logEvent } from "@/lib/events";
 import { createAuthorizeOrder, describePayPalError } from "@/lib/paypal";
-import { MILESTONE_STATUS } from "@/lib/status";
+import { canTransition } from "@/lib/status";
 
 // POST /api/paypal/orders  { milestoneId }
 // Creates an AUTHORIZE order for the milestone and saves the order id.
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   if (!milestone) {
     return NextResponse.json({ error: "Milestone not found" }, { status: 404 });
   }
-  if (milestone.status !== MILESTONE_STATUS.PENDING) {
+  if (!canTransition(milestone.status, "authorize")) {
     return NextResponse.json(
       { error: `Milestone is ${milestone.status}, it cannot be funded again` },
       { status: 409 },

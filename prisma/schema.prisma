@@ -7,50 +7,81 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// isDemo marks seeded demo records. They carry display amounts but never a
+// PayPal order or authorization, so payment routes refuse them with 409.
 model Deal {
   id             String      @id @default(cuid())
   title          String
   brief          String
   clientName     String
+  clientEmail    String?
   freelancerName String
-  repoUrl        String?
+  isDemo         Boolean     @default(false)
   milestones     Milestone[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 }
 
-// status: PENDING | FUNDED | SUBMITTED | DISPUTED | RELEASE_PENDING |
-//         RELEASED | PARTIALLY_RELEASED | VOIDED   (see lib/status.ts)
+// status: DRAFT | FUNDED | SUBMITTED | REVIEWED | RELEASED | DISPUTED |
+//         SETTLED | VOIDED   (see lib/status.ts for the allowed transitions)
+// Invariant: heldAmount + releasedAmount + refundedAmount is 0 (never funded)
+// or equal to amount.
 model Milestone {
-  id              String   @id @default(cuid())
+  id              String      @id @default(cuid())
   dealId          String
-  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  position        Int      @default(0)
+  deal            Deal        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  position        Int         @default(0)
   title           String
   criteria        Json
-  amount          Decimal  @db.Decimal(10, 2)
-  status          String   @default("PENDING")
+  amount          Decimal     @db.Decimal(10, 2)
+  status          String      @default("DRAFT")
+  heldAmount      Decimal     @default(0) @db.Decimal(10, 2)
+  releasedAmount  Decimal     @default(0) @db.Decimal(10, 2)
+  refundedAmount  Decimal     @default(0) @db.Decimal(10, 2)
   deliverableUrl  String?
-  orderId         String?  @unique
-  authorizationId String?  @unique
+  deliverableNote String?
+  reviewScore     Int?
+  reviewVerdict   String?
+  orderId         String?     @unique
+  authorizationId String?     @unique
   captureId       String?
-  capturedAmount  Decimal? @db.Decimal(10, 2)
   reviews         Review[]
+  mediations      Mediation[]
   events          Event[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   @@index([dealId])
 }
 
+// kind REVIEW: result is ReviewOutput; verdict and score are set.
+// kind MEDIATION: one row per turn; result is { round, speaker, message }.
 model Review {
-  id          String    @id @default(cuid())
-  milestoneId String
-  milestone   Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-  verdict     String
-  score       Int
-  result      Json
-  createdAt   DateTime  @default(now())
+  id             String    @id @default(cuid())
+  milestoneId    String
+  milestone      Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  kind           String    @default("REVIEW")
+  verdict        String?
+  score          Int?
+  result         Json
+  deliverableUrl String?
+  createdAt      DateTime  @default(now())
+
+  @@index([milestoneId])
+}
+
+// status: OPEN | ACCEPTED_BY_FREELANCER | ACCEPTED_BY_CLIENT |
+//         ACCEPTED_BY_BOTH | SETTLED
+// The newest row is the active mediation of a milestone.
+model Mediation {
+  id                     String    @id @default(cuid())
+  milestoneId            String
+  milestone              Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  status                 String    @default("OPEN")
+  proposedReleasePercent Int?
+  rationale              String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   @@index([milestoneId])
 }

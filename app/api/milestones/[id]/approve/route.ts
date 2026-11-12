@@ -2,9 +2,15 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { logEvent } from "@/lib/events";
 import { captureAuthorization, describePayPalError } from "@/lib/paypal";
-import { HELD_STATUSES, MILESTONE_STATUS } from "@/lib/status";
+import {
+  canTransition,
+  hasAuthorization,
+  MILESTONE_STATUS,
+  NO_AUTHORIZATION_MESSAGE,
+  paypalRequestId,
+} from "@/lib/status";
 
-// POST /api/milestones/:id/release
+// POST /api/milestones/:id/approve
 // Full capture of the held authorization: the freelancer gets paid.
 export async function POST(
   _request: Request,
@@ -16,19 +22,22 @@ export async function POST(
   if (!milestone) {
     return NextResponse.json({ error: "Milestone not found" }, { status: 404 });
   }
-  if (!milestone.authorizationId || !HELD_STATUSES.includes(milestone.status)) {
+  if (!canTransition(milestone.status, "approve")) {
     return NextResponse.json(
       { error: `Milestone is ${milestone.status}, there is nothing to release` },
       { status: 409 },
     );
   }
+  if (!hasAuthorization(milestone)) {
+    return NextResponse.json({ error: NO_AUTHORIZATION_MESSAGE }, { status: 409 });
+  }
 
   // Claim the milestone first so two concurrent requests cannot both capture.
   const claimed = await prisma.milestone.updateMany({
-    where: { id, status: milestone.status },
-    data: { status: MILESTONE_STATUS.RELEASE_PENDING },
+    where: { id, status: MILESTONE_STATUS.REVIEWED },
+    data: { status: MILESTONE_STATUS.RELEASED },
   });
-  if (claimed.count === 0) {
+  if (claimed.count !== 1) {
     return NextResponse.json(
       { error: "Milestone is already being processed" },
       { status: 409 },
@@ -40,39 +49,42 @@ export async function POST(
       milestone.authorizationId,
       undefined, // full amount
       true,
-      `release-${milestone.id}`,
+      paypalRequestId.approve(milestone.id),
     );
+    if (!capture.id || capture.status === "DECLINED" || capture.status === "FAILED") {
+      throw new Error(`Capture was not accepted (${capture.status ?? "no status"})`);
+    }
 
-    // PENDING captures are completed later by the PAYMENT.CAPTURE.COMPLETED webhook.
-    const status =
-      capture.status === "COMPLETED"
-        ? MILESTONE_STATUS.RELEASED
-        : MILESTONE_STATUS.RELEASE_PENDING;
-
+    const releasedAmount = milestone.amount.toFixed(2);
     await prisma.milestone.update({
       where: { id },
       data: {
-        status,
         captureId: capture.id,
-        capturedAmount: capture.amount?.value ?? milestone.amount,
+        releasedAmount: milestone.amount,
+        heldAmount: 0,
       },
     });
-    await logEvent(id, "PAYMENT_RELEASED", {
+    await logEvent(id, "RELEASED", {
+      authorizationId: milestone.authorizationId,
       captureId: capture.id,
       captureStatus: capture.status,
-      amount: capture.amount,
+      amount: releasedAmount,
     });
 
-    return NextResponse.json({ status, captureId: capture.id });
+    return NextResponse.json({
+      status: MILESTONE_STATUS.RELEASED,
+      captureId: capture.id,
+      releasedAmount,
+    });
   } catch (error) {
     // Put the milestone back so the release can be retried.
     await prisma.milestone.updateMany({
-      where: { id, status: MILESTONE_STATUS.RELEASE_PENDING },
-      data: { status: milestone.status },
+      where: { id, status: MILESTONE_STATUS.RELEASED, captureId: null },
+      data: { status: MILESTONE_STATUS.REVIEWED },
     });
     const info = describePayPalError(error);
     console.error("release failed", info);
-    await logEvent(id, "PAYMENT_RELEASE_FAILED", info);
+    await logEvent(id, "PAYMENT_FAILED", { action: "approve", ...info });
     return NextResponse.json(
       { error: info.message, details: info.details },
       { status: 502 },

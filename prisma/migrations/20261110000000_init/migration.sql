@@ -7,8 +7,9 @@ CREATE TABLE "Deal" (
     "title" TEXT NOT NULL,
     "brief" TEXT NOT NULL,
     "clientName" TEXT NOT NULL,
+    "clientEmail" TEXT,
     "freelancerName" TEXT NOT NULL,
-    "repoUrl" TEXT,
+    "isDemo" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -23,12 +24,17 @@ CREATE TABLE "Milestone" (
     "title" TEXT NOT NULL,
     "criteria" JSONB NOT NULL,
     "amount" DECIMAL(10,2) NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "heldAmount" DECIMAL(10,2) NOT NULL DEFAULT 0,
+    "releasedAmount" DECIMAL(10,2) NOT NULL DEFAULT 0,
+    "refundedAmount" DECIMAL(10,2) NOT NULL DEFAULT 0,
     "deliverableUrl" TEXT,
+    "deliverableNote" TEXT,
+    "reviewScore" INTEGER,
+    "reviewVerdict" TEXT,
     "orderId" TEXT,
     "authorizationId" TEXT,
     "captureId" TEXT,
-    "capturedAmount" DECIMAL(10,2),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -39,12 +45,27 @@ CREATE TABLE "Milestone" (
 CREATE TABLE "Review" (
     "id" TEXT NOT NULL,
     "milestoneId" TEXT NOT NULL,
-    "verdict" TEXT NOT NULL,
-    "score" INTEGER NOT NULL,
+    "kind" TEXT NOT NULL DEFAULT 'REVIEW',
+    "verdict" TEXT,
+    "score" INTEGER,
     "result" JSONB NOT NULL,
+    "deliverableUrl" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Review_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Mediation" (
+    "id" TEXT NOT NULL,
+    "milestoneId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "proposedReleasePercent" INTEGER,
+    "rationale" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Mediation_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -71,6 +92,9 @@ CREATE INDEX "Milestone_dealId_idx" ON "Milestone"("dealId");
 CREATE INDEX "Review_milestoneId_idx" ON "Review"("milestoneId");
 
 -- CreateIndex
+CREATE INDEX "Mediation_milestoneId_idx" ON "Mediation"("milestoneId");
+
+-- CreateIndex
 CREATE INDEX "Event_milestoneId_idx" ON "Event"("milestoneId");
 
 -- AddForeignKey
@@ -78,6 +102,9 @@ ALTER TABLE "Milestone" ADD CONSTRAINT "Milestone_dealId_fkey" FOREIGN KEY ("dea
 
 -- AddForeignKey
 ALTER TABLE "Review" ADD CONSTRAINT "Review_milestoneId_fkey" FOREIGN KEY ("milestoneId") REFERENCES "Milestone"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Mediation" ADD CONSTRAINT "Mediation_milestoneId_fkey" FOREIGN KEY ("milestoneId") REFERENCES "Milestone"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Event" ADD CONSTRAINT "Event_milestoneId_fkey" FOREIGN KEY ("milestoneId") REFERENCES "Milestone"("id") ON DELETE CASCADE ON UPDATE CASCADE;

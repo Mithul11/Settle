@@ -6,7 +6,7 @@ import {
   describePayPalError,
   firstAuthorization,
 } from "@/lib/paypal";
-import { MILESTONE_STATUS } from "@/lib/status";
+import { canTransition, MILESTONE_STATUS } from "@/lib/status";
 
 // POST /api/paypal/orders/:orderId/authorize
 // Called after the buyer approves. Places the hold and marks the milestone FUNDED.
@@ -23,7 +23,7 @@ export async function POST(
       { status: 404 },
     );
   }
-  if (milestone.status !== MILESTONE_STATUS.PENDING) {
+  if (!canTransition(milestone.status, "authorize")) {
     return NextResponse.json(
       { error: `Milestone is already ${milestone.status}` },
       { status: 409 },
@@ -43,10 +43,16 @@ export async function POST(
       where: { id: milestone.id },
       data: {
         authorizationId: authorization.id,
-        ...(held && { status: MILESTONE_STATUS.FUNDED }),
+        ...(held && {
+          status: MILESTONE_STATUS.FUNDED,
+          heldAmount: milestone.amount,
+          refundedAmount: 0,
+          releasedAmount: 0,
+          captureId: null,
+        }),
       },
     });
-    await logEvent(milestone.id, "ORDER_AUTHORIZED", {
+    await logEvent(milestone.id, held ? "FUNDED" : "PAYMENT_FAILED", {
       orderId,
       authorizationId: authorization.id,
       authorizationStatus: authorization.status,

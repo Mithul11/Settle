@@ -47,8 +47,9 @@ const MANIFEST =
 const ENTRY =
   /(^|\/)(index|main|app|server|page|layout|route|cli)\.(ts|tsx|js|jsx|mjs|py|go|rs|java|rb|php)$/i;
 const TEST = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z]+$/i;
+// Web files count as source too: many deliverables are front-end only.
 const SOURCE =
-  /\.(ts|tsx|js|jsx|mjs|py|go|rs|java|kt|rb|php|cs|c|cpp|swift|sql|prisma)$/i;
+  /\.(ts|tsx|js|jsx|mjs|py|go|rs|java|kt|rb|php|cs|c|cpp|swift|sql|prisma|html?|css|scss|vue|svelte|astro)$/i;
 
 /** Lower score = more useful for judging a deliverable. */
 function score(path: string): number {

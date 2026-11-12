@@ -27,10 +27,11 @@ Freelancers and clients do not trust each other at the moment money changes hand
 
 | Part | State |
 | --- | --- |
-| PayPal payment loop: authorize, capture, void, webhooks | Working |
-| Deal page with client and freelancer views | Working |
-| Scoper, Reviewer and Mediator agents | Schemas defined, routes return `501` for now |
-| AG Studio dashboard | Planned |
+| PayPal Sandbox loop: authorize, capture, void | Working, verified end to end in the sandbox |
+| PayPal webhooks (signature-verified, idempotent) | Working, verified with genuine sandbox deliveries |
+| Scoper, Reviewer and Mediator agents (Gemini) | Working |
+| Landing page, dashboard (AG Grid), deal, AI review and mediation pages | Working |
+| Partial settlement capture after mediation | Implemented, off by default (`SETTLEMENT_CAPTURE_ENABLED`) until verified in the sandbox |
 
 ## PayPal flow
 
@@ -61,7 +62,7 @@ sequenceDiagram
         S->>S: AI Mediators agree on a split
         S->>P: Capture part, final_capture = true
         P-->>S: Capture completed, remainder voided
-        Note over S: Milestone is PARTIALLY_RELEASED
+        Note over S: Milestone is SETTLED
     else Deal cancelled
         S->>P: Void authorization
         P-->>S: PAYMENT.AUTHORIZATION.VOIDED
@@ -102,7 +103,7 @@ Useful scripts:
 | `npm run build` / `npm start` | Production build and server |
 | `npm run typecheck` | TypeScript check |
 | `npm run lint` | ESLint |
-| `npm run db:seed` | Reset the demo deal (two milestones: $50 and $120) |
+| `npm run db:seed` | Reset the read-only demo deal (`/deals/demo`, three milestones) |
 
 ## Environment variables
 
@@ -111,7 +112,9 @@ Useful scripts:
 | `DATABASE_URL` | Yes | Neon dashboard, connection string with `?sslmode=require` |
 | `PAYPAL_CLIENT_ID` | Yes | PayPal Developer Dashboard, Apps & Credentials, **Sandbox** app |
 | `PAYPAL_CLIENT_SECRET` | Yes | Same sandbox app |
-| `PAYPAL_WEBHOOK_ID` | For webhooks | Same sandbox app, after adding a webhook (see below) |
+| `PAYPAL_BASE_URL` | No | `https://api-m.sandbox.paypal.com` (the only accepted value: Settle is sandbox-only) |
+| `PAYPAL_WEBHOOK_ID` | For webhooks | The webhook registered on **the same** sandbox app (each URL has its own ID) |
+| `SETTLEMENT_CAPTURE_ENABLED` | No | `false` by default. Only `true` lets an accepted mediation capture a partial amount |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | For the AI agents | [Google AI Studio](https://aistudio.google.com/apikey) |
 | `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash` |
 | `GITHUB_TOKEN` | No | Raises the GitHub API rate limit |
@@ -122,23 +125,30 @@ Secrets are read from the environment only. `.env` is git-ignored.
 
 In the sandbox app, add a webhook that points to `https://<your-host>/api/webhooks/paypal` and subscribe to:
 
-- `Payment capture completed`
+- `Payment authorization created`
 - `Payment authorization voided`
+- `Payment capture completed`
+- `Payment capture denied`
+- `Payment capture pending`
 
-Copy the webhook ID into `PAYPAL_WEBHOOK_ID`. Every webhook is verified with PayPal's `verify-webhook-signature` API before it is trusted. Webhooks need a public URL, so they work on Render but not on plain `localhost`. The payment loop does not depend on them: the app updates the milestone from the API response.
+Copy the webhook ID into `PAYPAL_WEBHOOK_ID`. Every delivery is verified with PayPal's `verify-webhook-signature` API before it is trusted, processed once per PayPal event id, cross-checked against the milestone's order, authorization and capture ids, and written to the audit log. Webhooks confirm and reconcile; they never start a payment or mark a milestone released. For local testing, expose port 3000 with `ngrok http 3000`.
+
+Note: PayPal does not support India-to-India payments. Use a **US** sandbox Business account as the app owner (payee) and a **US** sandbox Personal account as the buyer.
 
 ## Testing in the sandbox (for judges)
 
 You need a sandbox **personal** (buyer) account. Create one under *Testing Tools > Sandbox Accounts* in the PayPal Developer Dashboard, or use the default one that comes with every developer account. No real money moves.
 
-1. Open the demo deal at `/deals/demo`. Keep **View as: Client** selected.
-2. On milestone 1 ($50), click the **PayPal** button and log in with the sandbox personal account. Approve the payment.
-3. The badge changes to **Funded (held)**. In the sandbox buyer account the $50 appears as a pending authorization, not a completed payment.
-4. Click **Release $50.00**. The badge changes to **Released** and the payment is captured to the sandbox business account.
-5. Fund milestone 2 ($120) the same way, then click **Void hold**. The badge changes to **Voided** and the authorization disappears from the buyer account.
-6. Switch to **View as: Freelancer** to see the same milestones from the other side.
+The read-only demo deal at `/deals/demo` (tagged **DEMO**) shows every stage without PayPal. To move real sandbox money:
 
-To start over, run `npm run db:seed`.
+1. Go to **New deal**, click **Use example**, then **Generate milestones with AI**, then **Save and generate link** and **Open deal**.
+2. With **Client** selected in the top bar, click **Fund milestone**, then the PayPal button, and log in with the sandbox **Personal** account. The milestone becomes **Funded**: the amount is authorized and held, not captured.
+3. Switch to **Freelancer**, paste a public GitHub repository and **Submit for review**. Gemini checks every acceptance criterion and cites files as evidence.
+4. Switch to **Client**: **Read AI review**, then **Approve & release**. The authorization is captured and paid to the sandbox Business account.
+5. Or fund another milestone and **Void hold**: the authorization is voided and nothing is charged.
+6. Or **Dispute** a reviewed milestone: two AI advocates negotiate a split on the **Mediation** page, and both roles accept it.
+
+To reset the demo deal, run `npm run db:seed`.
 
 `GET /api/health` returns `{ "ok": true, "db": "up" }` when the app can reach the database.
 
@@ -148,17 +158,25 @@ To start over, run `npm run db:seed`.
 | --- | --- |
 | `POST /api/paypal/orders` | Body `{ milestoneId }`. Creates an AUTHORIZE order and saves the order id |
 | `POST /api/paypal/orders/[orderId]/authorize` | Authorizes the approved order, saves the authorization id, sets `FUNDED` |
-| `POST /api/milestones/[id]/release` | Full capture, sets `RELEASED` |
+| `POST /api/milestones/[id]/approve` | Client approval: full capture, sets `RELEASED` |
 | `POST /api/milestones/[id]/void` | Voids the authorization, sets `VOIDED` |
-| `POST /api/webhooks/paypal` | Verifies the signature, logs the event, updates the milestone |
+| `POST /api/milestones/[id]/settlement/accept` | Body `{ role }`. Records acceptance; when both accepted (and enabled) captures the agreed share |
+| `POST /api/webhooks/paypal` | Verifies the signature, deduplicates, reconciles and logs the event |
+| `POST /api/ai/scope` | Gemini Scoper: brief to milestones, criteria and prices |
+| `POST /api/deals`, `GET /api/deals/[id]` | Create and read a deal |
+| `POST /api/milestones/[id]/submit` | Freelancer submits a GitHub repo; the AI review runs in the same request |
+| `POST /api/ai/review/[milestoneId]` | Gemini Reviewer (cached per deliverable) |
+| `POST /api/milestones/[id]/dispute` | Client opens a dispute; funds stay authorized |
+| `POST /api/ai/mediate/[milestoneId]` | Two AI advocates negotiate and propose a split |
 | `GET /api/health` | Liveness and database ping |
-| `POST /api/ai/scope`, `/api/milestones/[id]/review`, `/api/milestones/[id]/mediate` | AI agents, not implemented yet (`501`) |
 
-The amount of every order is read from the database on the server. The browser only sends a milestone id.
+Payment rules: the amount of every order is read from the database, never the browser. Full capture happens only on client approval, partial capture only after both parties accept a settlement. AI code never imports the PayPal module. Every capture claims the milestone first and sends a stable `PayPal-Request-Id`, so a retry or double click cannot capture twice.
 
-## Deploying to Render
+## Deploying
 
-`render.yaml` describes one web service. Create a new Blueprint from the repository, then set the secret environment variables in the Render dashboard. The build runs `prisma migrate deploy`, so the database schema is created on the first deploy.
+**Vercel:** import the repository, set the environment variables above and use the build command `prisma migrate deploy && next build`. Register a webhook for the deployed URL on the same PayPal sandbox app and use its ID.
+
+**Render:** `render.yaml` describes one web service. Create a new Blueprint from the repository, then set the secret environment variables in the Render dashboard. The build runs `prisma migrate deploy`, so the database schema is created on the first deploy.
 
 ## Tools used
 
@@ -170,4 +188,4 @@ The amount of every order is read from the database on the server. The browser o
 
 ## License
 
-[MIT](./LICENSE) © Mithul
+[MIT](./LICENSE) (c) Mithul
